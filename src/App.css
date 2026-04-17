@@ -315,6 +315,7 @@
 .notice {
   margin: 1rem 0 0;
   color: #475569;
+  line-height: 1.5;
 }
 
 .toggle {
@@ -371,6 +372,10 @@
 .ocr-result {
   display: grid;
   gap: 1rem;
+}
+
+.ocr-result .field input::placeholder {
+  color: #94a3b8;
 }
 
 .candidate-group {

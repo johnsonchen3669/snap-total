@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Tesseract from 'tesseract.js'
 import logoUrl from '../icon.svg'
+import { preprocessImageForOcr } from './imagePreprocess'
 import './App.css'
 
 type EntrySource = 'manual' | 'ocr'
@@ -20,6 +21,7 @@ type PersistedState = {
 }
 
 const STORAGE_KEY = 'snap-total-state-v1'
+const OCR_LANGUAGE = ['eng', 'chi_tra']
 const currencyFormatter = new Intl.NumberFormat('zh-TW', {
   style: 'currency',
   currency: 'TWD',
@@ -94,33 +96,158 @@ function formatCurrency(value: number) {
   return currencyFormatter.format(value)
 }
 
-function extractPriceCandidates(text: string) {
-  const normalized = text
-    .replace(/[Oo]/g, '0')
-    .replace(/[Il]/g, '1')
+function normalizeOcrText(text: string) {
+  let normalized = text
+    .replace(/\r/g, '')
+    .replace(/[OoODQＣ○]/g, '0')
+    .replace(/[Il|!]/g, '1')
+    .replace(/[Zz]/g, '2')
+    .replace(/[B]/g, '8')
+    .replace(/[G]/g, '6')
     .replace(/[,，]/g, ',')
+    .replace(/[．。]/g, '.')
+    .replace(/NT\s*\$/gi, 'NT$')
+    .replace(/[Ss](?=\s*\d)/g, () => '$')
+    .replace(/\$\s+(?=\d)/g, () => '$')
 
-  const pattern =
-    /(?:NT\$?|TWD|\$)?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d{1,5}(?:\.\d{1,2})?)(?:\s*元)?/g
+  for (let index = 0; index < 3; index += 1) {
+    normalized = normalized.replace(/(\d)[\s:：;·•]+(?=\d)/g, '$1')
+  }
 
-  const candidates: number[] = []
+  return normalized
+}
 
-  for (const match of normalized.matchAll(pattern)) {
-    const rawValue = match[1]
-    const value = Number.parseFloat(rawValue.replace(/,/g, ''))
+function extractProductName(text: string) {
+  const stopWords = ['特價', '原價', '促銷', '會員', '卡友', '折扣', '限時', '價格', '售價']
+  const normalizedLines = normalizeOcrText(text)
+    .split('\n')
+    .map((line) =>
+      line
+        .replace(/(?:NT\$?|TWD|\$)?\s*\d[\d,.]*(?:\.\d{1,2})?(?:\s*元)?/gi, ' ')
+        .replace(/[0-9$＄,，.。:：%％]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter(Boolean)
 
-    if (!Number.isFinite(value) || value <= 0 || value > 99999) {
-      continue
-    }
+  let bestCandidate = ''
+  let bestScore = 0
 
-    const integerValue = Math.round(value)
+  for (const line of normalizedLines) {
+    const matches = line.match(/[\u4e00-\u9fffA-Za-z]{2,16}/g) ?? []
 
-    if (!candidates.includes(integerValue)) {
-      candidates.push(integerValue)
+    for (const rawCandidate of matches) {
+      const candidate = rawCandidate.trim()
+
+      if (candidate.length < 2 || stopWords.some((word) => candidate.includes(word))) {
+        continue
+      }
+
+      let score = candidate.length
+
+      if (/[\u4e00-\u9fff]/.test(candidate)) {
+        score += 6
+      }
+
+      if (candidate.length >= 4 && candidate.length <= 10) {
+        score += 3
+      }
+
+      if (score > bestScore) {
+        bestCandidate = candidate
+        bestScore = score
+      }
     }
   }
 
-  return candidates.slice(0, 6)
+  return bestCandidate
+}
+
+function extractPriceCandidates(text: string) {
+  const normalized = normalizeOcrText(text)
+  const scores = new Map<number, number>()
+  const pricePattern = /(?:NT\$?|TWD|\$)?\s*(\d{2,5}(?:,\d{3})*(?:\.\d{1,2})?)(?:\s*元)?/gi
+  const lines = normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (const line of lines) {
+    const compactLine = line.replace(/\s+/g, ' ')
+    const hasCurrencyHint = /(?:NT\$?|TWD|\$|元)/i.test(compactLine)
+    const looksLikeDate = /\d{2,4}[/-]\d{1,2}[/-]\d{1,2}/.test(compactLine)
+
+    for (const match of compactLine.matchAll(pricePattern)) {
+      const rawValue = match[1]
+      const digitsOnly = rawValue.replace(/[^\d]/g, '')
+
+      if (digitsOnly.length < 2 || (digitsOnly.length >= 8 && digitsOnly.length <= 13)) {
+        continue
+      }
+
+      const parsed = Number.parseFloat(rawValue.replace(/,/g, ''))
+
+      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 99999) {
+        continue
+      }
+
+      const amount = Math.round(parsed)
+      let score = 1
+
+      if (hasCurrencyHint) {
+        score += 5
+      }
+
+      if (match[0].includes('元')) {
+        score += 2
+      }
+
+      if (amount >= 10 && amount <= 5000) {
+        score += 2
+      }
+
+      if (compactLine.length <= 18) {
+        score += 1
+      }
+
+      if (looksLikeDate) {
+        score -= 3
+      }
+
+      if (/%|折|件/.test(compactLine)) {
+        score -= 1
+      }
+
+      const previousScore = scores.get(amount) ?? Number.NEGATIVE_INFINITY
+
+      if (score > previousScore) {
+        scores.set(amount, score)
+      }
+    }
+  }
+
+  if (scores.size === 0) {
+    for (const match of normalized.matchAll(/\b(\d{2,4})\b/g)) {
+      const amount = Number.parseInt(match[1], 10)
+
+      if (amount >= 10 && amount <= 5000) {
+        scores.set(amount, Math.max(scores.get(amount) ?? 0, 1))
+      }
+    }
+  }
+
+  return [...scores.entries()]
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1]
+      }
+
+      const leftDistance = Math.abs(left[0] - 200)
+      const rightDistance = Math.abs(right[0] - 200)
+      return leftDistance - rightDistance
+    })
+    .map(([amount]) => amount)
+    .slice(0, 6)
 }
 
 function createCsv(entries: Entry[]) {
@@ -137,6 +264,7 @@ function createCsv(entries: Entry[]) {
 
 function App() {
   const initialState = useMemo(() => loadInitialState(), [])
+  const ocrWorkerRef = useRef<Promise<Awaited<ReturnType<typeof Tesseract.createWorker>>> | null>(null)
   const [entries, setEntries] = useState<Entry[]>(initialState.entries)
   const [budget, setBudget] = useState(initialState.budget)
   const [seniorMode, setSeniorMode] = useState(initialState.seniorMode)
@@ -176,6 +304,14 @@ function App() {
     }
   }, [imagePreviewUrl])
 
+  useEffect(() => {
+    return () => {
+      if (ocrWorkerRef.current) {
+        void ocrWorkerRef.current.then((worker) => worker.terminate()).catch(() => undefined)
+      }
+    }
+  }, [])
+
   const totalAmount = entries.reduce((sum, entry) => sum + entry.amount, 0)
   const budgetAmount = parseAmount(budget)
   const remainingBudget = budgetAmount - totalAmount
@@ -202,6 +338,34 @@ function App() {
       },
       ...current,
     ])
+  }
+
+  async function getOcrWorker() {
+    if (!ocrWorkerRef.current) {
+      ocrWorkerRef.current = (async () => {
+        const worker = await Tesseract.createWorker(OCR_LANGUAGE, 1, {
+          logger: (message) => {
+            if (message.status) {
+              const progress = Math.round((message.progress ?? 0) * 100)
+              setOcrNotice(`${message.status} ${progress}%`)
+            }
+          },
+        })
+
+        await worker.setParameters({
+          tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '300',
+        })
+
+        return worker
+      })().catch((error) => {
+        ocrWorkerRef.current = null
+        throw error
+      })
+    }
+
+    return ocrWorkerRef.current
   }
 
   function handleManualAdd() {
@@ -297,31 +461,38 @@ function App() {
     setImageName(file.name)
     setIsProcessing(true)
     setOcrText('')
+    setOcrName('')
     setOcrAmount('')
     setOcrCandidates([])
-    setOcrNotice('正在辨識圖片中的價格，請稍候...')
+    setOcrNotice('正在整理照片並辨識價格，第一次使用會先下載語言模型，請稍候...')
 
     try {
-      const result = await Tesseract.recognize(file, 'eng', {
-        logger: (message) => {
-          if (message.status) {
-            const progress = Math.round((message.progress ?? 0) * 100)
-            setOcrNotice(`${message.status} ${progress}%`)
-          }
-        },
-      })
+      setOcrNotice('正在優化照片清晰度，請稍候...')
+      const processedImage = await preprocessImageForOcr(file)
+      const worker = await getOcrWorker()
+      const result = await worker.recognize(processedImage)
 
       const text = result.data.text.trim()
       const candidates = extractPriceCandidates(text)
+      const suggestedName = extractProductName(text)
 
       setOcrText(text)
       setOcrCandidates(candidates)
+      setOcrName(suggestedName)
 
       if (candidates.length > 0) {
         setOcrAmount(String(candidates[0]))
-        setOcrNotice('已找到可能的價格，確認後即可加入清單。')
+        setOcrNotice(
+          suggestedName
+            ? '已找到可能的價格與品名建議，確認後即可加入清單。'
+            : '已找到可能的價格，確認後即可加入清單。',
+        )
       } else {
-        setOcrNotice('沒有找到明確價格，請直接手動修正金額。')
+        setOcrNotice(
+          suggestedName
+            ? '已抓到可能的品名，但價格不夠明確，請直接手動修正金額。'
+            : '沒有找到明確價格，請直接手動修正金額。',
+        )
       }
     } catch {
       setOcrNotice('辨識失敗，請換一張照片，或直接在下方手動輸入金額。')
@@ -353,6 +524,17 @@ function App() {
 
     setOcrNotice(`已加入 OCR 辨識金額 ${formatCurrency(amount)}。`)
   }
+
+  useEffect(() => {
+    if (activeTab !== 'ocr' || ocrWorkerRef.current) {
+      return
+    }
+
+    setOcrNotice('OCR 準備中，第一次使用會先下載繁中與英文模型。')
+    void getOcrWorker().catch(() => {
+      setOcrNotice('OCR 模型初始化失敗，仍可直接手動輸入金額。')
+    })
+  }, [activeTab])
 
   return (
     <main className={`app-shell${seniorMode ? ' senior-mode' : ''}`}>
@@ -533,7 +715,7 @@ function App() {
 
                 <div className="ocr-result">
                   <label className="field">
-                    <span>品名（可不填）</span>
+                    <span>品名（會自動帶入，可修改）</span>
                     <input
                       type="text"
                       value={ocrName}
