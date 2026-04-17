@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Tesseract from 'tesseract.js'
 import logoUrl from '../icon.svg'
 import { preprocessImageForOcr } from './imagePreprocess'
+import {
+  type VisionItem,
+  VisionApiError,
+  recognizeWithVision,
+} from './ocrVision'
 import './App.css'
 
 type EntrySource = 'manual' | 'ocr'
@@ -330,6 +335,7 @@ function App() {
   const [imageName, setImageName] = useState('')
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>('manual')
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [visionItems, setVisionItems] = useState<VisionItem[]>([])
 
   useEffect(() => {
     localStorage.setItem(
@@ -491,6 +497,78 @@ function App() {
     URL.revokeObjectURL(link.href)
   }
 
+  async function runTesseractOcr(file: File) {
+    setOcrNotice('正在優化照片清晰度，請稍候...')
+    const processedImage = await preprocessImageForOcr(file)
+    const worker = await getOcrWorker()
+    const result = await worker.recognize(processedImage)
+
+    const text = result.data.text.trim()
+    const candidates = extractPriceCandidates(text)
+    const suggestedName = extractProductName(text)
+
+    setOcrText(text)
+    setOcrCandidates(candidates)
+    setOcrName(suggestedName)
+    setVisionItems([])
+
+    if (candidates.length > 0) {
+      setOcrAmount(String(candidates[0]))
+      setOcrNotice(
+        suggestedName
+          ? '已找到可能的價格與品名建議，確認後即可加入清單。'
+          : '已找到可能的價格，確認後即可加入清單。',
+      )
+    } else {
+      setOcrNotice(
+        suggestedName
+          ? '已抓到可能的品名，但價格不夠明確，請直接手動修正金額。'
+          : '沒有找到明確價格，請直接手動修正金額。',
+      )
+    }
+  }
+
+  async function runVisionOcr(file: File) {
+    setOcrNotice('正在使用 AI 辨識照片中的價格...')
+
+    try {
+      const result = await recognizeWithVision(file)
+      setOcrText(result.rawText)
+
+      if (result.items.length > 0) {
+        setVisionItems(result.items)
+        setOcrCandidates([])
+        setOcrName(result.items[0].name)
+        setOcrAmount(String(result.items[0].price))
+        setOcrNotice(
+          result.items.length === 1
+            ? `AI 辨識出 1 筆商品，確認後即可加入清單。`
+            : `AI 辨識出 ${result.items.length} 筆商品，可逐筆加入清單。`,
+        )
+      } else {
+        setVisionItems([])
+        setOcrNotice('AI 未能辨識出商品，正在嘗試本地辨識...')
+        await runTesseractOcr(file)
+      }
+    } catch (error) {
+      setVisionItems([])
+
+      if (error instanceof VisionApiError) {
+        if (error.code === 'TOKEN_INVALID') {
+          setOcrNotice(`${error.message} 改用本地辨識中...`)
+        } else if (error.code === 'RATE_LIMITED') {
+          setOcrNotice(`${error.message}`)
+        } else {
+          setOcrNotice(`AI 辨識失敗，改用本地辨識中...`)
+        }
+      } else {
+        setOcrNotice('AI 辨識失敗，改用本地辨識中...')
+      }
+
+      await runTesseractOcr(file)
+    }
+  }
+
   async function handleImageChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
 
@@ -510,36 +588,10 @@ function App() {
     setOcrName('')
     setOcrAmount('')
     setOcrCandidates([])
-    setOcrNotice('正在整理照片並辨識價格，第一次使用會先下載語言模型，請稍候...')
+    setVisionItems([])
 
     try {
-      setOcrNotice('正在優化照片清晰度，請稍候...')
-      const processedImage = await preprocessImageForOcr(file)
-      const worker = await getOcrWorker()
-      const result = await worker.recognize(processedImage)
-
-      const text = result.data.text.trim()
-      const candidates = extractPriceCandidates(text)
-      const suggestedName = extractProductName(text)
-
-      setOcrText(text)
-      setOcrCandidates(candidates)
-      setOcrName(suggestedName)
-
-      if (candidates.length > 0) {
-        setOcrAmount(String(candidates[0]))
-        setOcrNotice(
-          suggestedName
-            ? '已找到可能的價格與品名建議，確認後即可加入清單。'
-            : '已找到可能的價格，確認後即可加入清單。',
-        )
-      } else {
-        setOcrNotice(
-          suggestedName
-            ? '已抓到可能的品名，但價格不夠明確，請直接手動修正金額。'
-            : '沒有找到明確價格，請直接手動修正金額。',
-        )
-      }
+      await runVisionOcr(file)
     } catch {
       setOcrNotice('辨識失敗，請換一張照片，或直接在下方手動輸入金額。')
     } finally {
@@ -561,6 +613,7 @@ function App() {
     setOcrAmount('')
     setOcrText('')
     setOcrCandidates([])
+    setVisionItems([])
     setImageName('')
 
     if (imagePreviewUrl) {
@@ -569,6 +622,29 @@ function App() {
     }
 
     setOcrNotice(`已加入 OCR 辨識金額 ${formatCurrency(amount)}。`)
+  }
+
+  function handleAddVisionItem(item: VisionItem) {
+    addEntry(item.price, item.name, 'ocr')
+    setVisionItems((current) => current.filter((i) => i !== item))
+    setOcrNotice(`已加入「${item.name}」${formatCurrency(item.price)}。`)
+
+    if (visionItems.length <= 1) {
+      setOcrName('')
+      setOcrAmount('')
+    }
+  }
+
+  function handleAddAllVisionItems() {
+    for (const item of visionItems) {
+      addEntry(item.price, item.name, 'ocr')
+    }
+
+    const total = visionItems.reduce((sum, item) => sum + item.price, 0)
+    setVisionItems([])
+    setOcrName('')
+    setOcrAmount('')
+    setOcrNotice(`已一次加入 ${visionItems.length} 筆，共 ${formatCurrency(total)}。`)
   }
 
   useEffect(() => {
@@ -667,6 +743,14 @@ function App() {
                 <span>長輩模式 (大字體)</span>
               </label>
             </div>
+
+            <div className="settings-divider" />
+
+            <div className="token-section">
+              <h3>AI 辨識</h3>
+              <p className="token-active">✓ AI 辨識已啟用（gpt-4.1-nano）</p>
+            </div>
+
             <button type="button" className="primary-button full-width-add" onClick={() => setIsSettingsOpen(false)}>
               完成
             </button>
@@ -781,7 +865,31 @@ function App() {
                     />
                   </label>
 
-                  {ocrCandidates.length > 0 ? (
+                  {visionItems.length > 1 ? (
+                    <div className="vision-items-group">
+                      <div className="vision-items-header">
+                        <span>AI 辨識結果（{visionItems.length} 筆）</span>
+                        <button type="button" className="ghost-button" onClick={handleAddAllVisionItems}>
+                          全部加入
+                        </button>
+                      </div>
+                      <div className="vision-items-list">
+                        {visionItems.map((item, index) => (
+                          <div key={`${item.name}-${item.price}-${index}`} className="vision-item">
+                            <div className="vision-item-info">
+                              <strong>{item.name}</strong>
+                              <span>{formatCurrency(item.price)}</span>
+                            </div>
+                            <button type="button" className="ghost-button" onClick={() => handleAddVisionItem(item)}>
+                              加入
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {ocrCandidates.length > 0 && visionItems.length <= 1 ? (
                     <div className="candidate-group">
                       <span>辨識候選金額</span>
                       <div className="candidate-list">
@@ -800,7 +908,7 @@ function App() {
                   ) : null}
 
                   <button type="button" className="primary-button" onClick={handleAddOcrItem}>
-                    加入辨識結果
+                    {visionItems.length > 1 ? '加入自訂金額' : '加入辨識結果'}
                   </button>
                 </div>
               </div>

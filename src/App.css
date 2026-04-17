@@ -866,4 +866,153 @@
     background: rgba(15, 23, 42, 0.6);
     backdrop-filter: blur(2px);
   }
+
+  .settings-modal {
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+}
+
+/* --- Token & AI Settings --- */
+
+.settings-divider {
+  border: none;
+  border-top: 1px solid #e2e8f0;
+  margin: 1.25rem 0;
+}
+
+.token-section h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  color: #334155;
+}
+
+.token-hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.82rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.token-hint a {
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.token-hint a:hover {
+  text-decoration: underline;
+}
+
+.token-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.token-input {
+  flex: 1;
+  font-size: 0.85rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  font-family: monospace;
+}
+
+.token-saved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.token-mask {
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: #166534;
+}
+
+.danger-button {
+  color: #dc2626 !important;
+}
+
+.danger-button:hover {
+  background: #fef2f2 !important;
+}
+
+.token-notice {
+  margin: 0.5rem 0 0;
+  font-size: 0.8rem;
+  color: #d97706;
+}
+
+.token-privacy {
+  margin: 0.75rem 0 0;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.token-active {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #166534;
+  font-weight: 600;
+}
+
+.token-inactive {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+/* --- Vision multi-item results --- */
+
+.vision-items-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+
+.vision-items-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: #f8fafc;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.vision-items-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.vision-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid #f1f5f9;
+}
+
+.vision-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.vision-item-info strong {
+  font-size: 0.9rem;
+  color: #1e293b;
+}
+
+.vision-item-info span {
+  font-size: 0.8rem;
+  color: #64748b;
 }
