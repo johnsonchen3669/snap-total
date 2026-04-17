@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 700" width="100%" height="100%" style="background-color: #0d1117; font-family: monospace;">
+  <defs>
+    <!-- 定義箭頭尾端 -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#00e5ff" />
+    </marker>
+    <!-- 定義雙向箭頭/無箭頭線段與樣式基礎 -->
+    <style>
+      .node-rect {
+        fill: rgba(0, 229, 255, 0.1);
+        stroke: #00e5ff;
+        stroke-width: 2;
+      }
+      .node-text {
+        fill: #00e5ff;
+        font-size: 14px;
+        text-anchor: middle;
+        alignment-baseline: middle;
+      }
+      .line {
+        stroke: #00e5ff;
+        stroke-width: 2;
+        fill: none;
+      }
+      .line-arrow {
+        stroke: #00e5ff;
+        stroke-width: 2;
+        fill: none;
+        marker-end: url(#arrow);
+      }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="40" font-size="20" fill="#00e5ff" text-anchor="middle" font-weight="bold">SnapTotal - High Level Architecture</text>
+
+  <!-- =============================== -->
+  <!-- 主流程 (由上至下) -->
+  <!-- =============================== -->
+
+  <!-- N1: Input -->
+  <rect x="280" y="80" width="240" height="60" rx="8" class="node-rect" />
+  <text x="400" y="105" class="node-text">captureImage() / input()</text>
+  <text x="400" y="125" class="node-text" font-size="12">→ 獲取圖片或手動輸入</text>
+
+  <!-- Line N1 -> N2 -->
+  <line x1="400" y1="140" x2="400" y2="190" class="line-arrow" />
+
+  <!-- N2: OCR Processing -->
+  <rect x="280" y="200" width="240" height="60" rx="8" class="node-rect" />
+  <text x="400" y="225" class="node-text">processOCR()</text>
+  <text x="400" y="245" class="node-text" font-size="12">→ 圖片轉文字</text>
+
+  <!-- Line N2 -> N3 -->
+  <line x1="400" y1="260" x2="400" y2="310" class="line-arrow" />
+
+  <!-- N3: Price Extraction -->
+  <rect x="280" y="320" width="240" height="60" rx="8" class="node-rect" />
+  <text x="400" y="345" class="node-text">extractPrice()</text>
+  <text x="400" y="365" class="node-text" font-size="12">→ 解析並抓取金額數字</text>
+
+  <!-- Line N3 -> N4 -->
+  <line x1="400" y1="380" x2="400" y2="430" class="line-arrow" />
+
+  <!-- N4: State Management -->
+  <rect x="280" y="440" width="240" height="60" rx="8" class="node-rect" />
+  <text x="400" y="465" class="node-text">updateTotal()</text>
+  <text x="400" y="485" class="node-text" font-size="12">→ 寫入清單並累計總額</text>
+
+  <!-- Line N4 -> N5 -->
+  <line x1="400" y1="500" x2="400" y2="550" class="line-arrow" />
+
+  <!-- N5: UI Render -->
+  <rect x="280" y="560" width="240" height="60" rx="8" class="node-rect" />
+  <text x="400" y="585" class="node-text">renderUI()</text>
+  <text x="400" y="605" class="node-text" font-size="12">→ 更新畫面顯示</text>
+
+  <!-- =============================== -->
+  <!-- 側邊輔助節點 (外部資源 / 資料庫) -->
+  <!-- =============================== -->
+
+  <!-- Aux: Vision API -->
+  <rect x="580" y="200" width="180" height="60" rx="8" class="node-rect" />
+  <text x="670" y="225" class="node-text">Vision API</text>
+  <text x="670" y="245" class="node-text" font-size="12">→ 外部文字辨識服務</text>
+  <!-- 雙向或單向相依線段 (N2 <-> Vision API) -->
+  <line x1="520" y1="230" x2="570" y2="230" class="line-arrow" />
+  
+  <!-- Aux: LocalStorage / DB -->
+  <rect x="40" y="440" width="180" height="60" rx="8" class="node-rect" />
+  <text x="130" y="465" class="node-text">localStorage</text>
+  <text x="130" y="485" class="node-text" font-size="12">→ 儲存購物狀態</text>
+  <!-- 相依線段 (N4 <-> DB) -->
+  <line x1="280" y1="470" x2="230" y2="470" class="line-arrow" />
+
+</svg>
