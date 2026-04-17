@@ -118,22 +118,52 @@ function normalizeOcrText(text: string) {
 }
 
 function extractProductName(text: string) {
-  const stopWords = ['特價', '原價', '促銷', '會員', '卡友', '折扣', '限時', '價格', '售價']
-  const normalizedLines = normalizeOcrText(text)
-    .split('\n')
+  const labelKeywords = ['商品名稱', '品名', '名稱', '商品', '品項', '項目']
+  const stopWords = [
+    '特價', '原價', '促銷', '會員', '卡友', '折扣', '限時', '價格', '售價',
+    '地址', '電話', '統編', '發票', '門市', '店號', '收銀', '日期', '時間',
+    '謝謝', '歡迎', '光臨', '找零', '現金', '信用卡', '載具', '備註',
+    '小計', '合計', '總計', '稅額', '營業', '公司', '股份', '有限',
+  ]
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean)
+
+  for (const line of lines) {
+    for (const label of labelKeywords) {
+      const labelIndex = line.indexOf(label)
+
+      if (labelIndex < 0) {
+        continue
+      }
+
+      const afterLabel = line
+        .slice(labelIndex + label.length)
+        .replace(/^[\s:：/|]+/, '')
+        .replace(/(?:NT\$?|TWD|\$)?\s*\d[\d,.]*(?:\.\d{1,2})?(?:\s*元)?/gi, '')
+        .replace(/[0-9$＄,，.。%％]/g, '')
+        .trim()
+
+      const chineseMatch = afterLabel.match(/[\u4e00-\u9fffA-Za-z]{2,16}/)
+
+      if (chineseMatch && !stopWords.some((word) => chineseMatch[0].includes(word))) {
+        return chineseMatch[0]
+      }
+    }
+  }
+
+  const cleanedLines = lines
     .map((line) =>
       line
         .replace(/(?:NT\$?|TWD|\$)?\s*\d[\d,.]*(?:\.\d{1,2})?(?:\s*元)?/gi, ' ')
-        .replace(/[0-9$＄,，.。:：%％]/g, ' ')
+        .replace(/[0-9$＄,，.。:：%％#*/]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim(),
     )
     .filter(Boolean)
 
   let bestCandidate = ''
-  let bestScore = 0
+  let bestScore = -1
 
-  for (const line of normalizedLines) {
+  for (const line of cleanedLines) {
     const matches = line.match(/[\u4e00-\u9fffA-Za-z]{2,16}/g) ?? []
 
     for (const rawCandidate of matches) {
@@ -143,14 +173,22 @@ function extractProductName(text: string) {
         continue
       }
 
-      let score = candidate.length
-
-      if (/[\u4e00-\u9fff]/.test(candidate)) {
-        score += 6
+      if (labelKeywords.some((keyword) => candidate === keyword)) {
+        continue
       }
 
-      if (candidate.length >= 4 && candidate.length <= 10) {
+      let score = 0
+
+      if (/[\u4e00-\u9fff]/.test(candidate)) {
+        score += 4
+      }
+
+      if (candidate.length >= 2 && candidate.length <= 8) {
         score += 3
+      }
+
+      if (candidate.length > 8) {
+        score -= 2
       }
 
       if (score > bestScore) {
@@ -166,86 +204,94 @@ function extractProductName(text: string) {
 function extractPriceCandidates(text: string) {
   const normalized = normalizeOcrText(text)
   const scores = new Map<number, number>()
-  const pricePattern = /(?:NT\$?|TWD|\$)?\s*(\d{2,5}(?:,\d{3})*(?:\.\d{1,2})?)(?:\s*元)?/gi
+
+  const currencyPattern =
+    /(?:NT\$|TWD\s*\$?|\$)\s*(\d{1,5}(?:,\d{3})*(?:\.\d{1,2})?)(?:\s*元)?/gi
+
+  const yuanPattern =
+    /(\d{1,5}(?:,\d{3})*(?:\.\d{1,2})?)\s*元/gi
+
   const lines = normalized
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
 
+  const noisePatterns = [
+    /\d{2,4}[/-]\d{1,2}[/-]\d{1,2}/,
+    /地址|電話|統編|發票|門市|店號|收銀/,
+    /\d{3,4}-\d{3,4}-\d{3,4}/,
+  ]
+
+  function addCandidate(rawValue: string, baseScore: number, line: string) {
+    const digitsOnly = rawValue.replace(/[^\d]/g, '')
+
+    if (digitsOnly.length < 1 || (digitsOnly.length >= 8 && digitsOnly.length <= 13)) {
+      return
+    }
+
+    const parsed = Number.parseFloat(rawValue.replace(/,/g, ''))
+
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 99999) {
+      return
+    }
+
+    const amount = Math.round(parsed)
+    let score = baseScore
+
+    if (amount >= 10 && amount <= 5000) {
+      score += 2
+    }
+
+    if (noisePatterns.some((pattern) => pattern.test(line))) {
+      score -= 8
+    }
+
+    if (/%|折|件/.test(line)) {
+      score -= 2
+    }
+
+    const previousScore = scores.get(amount) ?? Number.NEGATIVE_INFINITY
+
+    if (score > previousScore) {
+      scores.set(amount, score)
+    }
+  }
+
   for (const line of lines) {
     const compactLine = line.replace(/\s+/g, ' ')
-    const hasCurrencyHint = /(?:NT\$?|TWD|\$|元)/i.test(compactLine)
-    const looksLikeDate = /\d{2,4}[/-]\d{1,2}[/-]\d{1,2}/.test(compactLine)
 
-    for (const match of compactLine.matchAll(pricePattern)) {
-      const rawValue = match[1]
-      const digitsOnly = rawValue.replace(/[^\d]/g, '')
+    for (const match of compactLine.matchAll(currencyPattern)) {
+      addCandidate(match[1], 10, compactLine)
+    }
 
-      if (digitsOnly.length < 2 || (digitsOnly.length >= 8 && digitsOnly.length <= 13)) {
-        continue
-      }
-
-      const parsed = Number.parseFloat(rawValue.replace(/,/g, ''))
-
-      if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 99999) {
-        continue
-      }
-
-      const amount = Math.round(parsed)
-      let score = 1
-
-      if (hasCurrencyHint) {
-        score += 5
-      }
-
-      if (match[0].includes('元')) {
-        score += 2
-      }
-
-      if (amount >= 10 && amount <= 5000) {
-        score += 2
-      }
-
-      if (compactLine.length <= 18) {
-        score += 1
-      }
-
-      if (looksLikeDate) {
-        score -= 3
-      }
-
-      if (/%|折|件/.test(compactLine)) {
-        score -= 1
-      }
-
-      const previousScore = scores.get(amount) ?? Number.NEGATIVE_INFINITY
-
-      if (score > previousScore) {
-        scores.set(amount, score)
-      }
+    for (const match of compactLine.matchAll(yuanPattern)) {
+      addCandidate(match[1], 8, compactLine)
     }
   }
 
   if (scores.size === 0) {
-    for (const match of normalized.matchAll(/\b(\d{2,4})\b/g)) {
-      const amount = Number.parseInt(match[1], 10)
+    const barePattern = /(?<!\d)(\d{2,5})(?!\d)/g
 
-      if (amount >= 10 && amount <= 5000) {
-        scores.set(amount, Math.max(scores.get(amount) ?? 0, 1))
+    for (const line of lines) {
+      const compactLine = line.replace(/\s+/g, ' ')
+
+      if (noisePatterns.some((pattern) => pattern.test(compactLine))) {
+        continue
+      }
+
+      for (const match of compactLine.matchAll(barePattern)) {
+        const amount = Number.parseInt(match[1], 10)
+
+        if (amount >= 10 && amount <= 5000) {
+          addCandidate(match[1], 1, compactLine)
+        }
       }
     }
   }
 
   return [...scores.entries()]
-    .sort((left, right) => {
-      if (right[1] !== left[1]) {
-        return right[1] - left[1]
-      }
-
-      const leftDistance = Math.abs(left[0] - 200)
-      const rightDistance = Math.abs(right[0] - 200)
-      return leftDistance - rightDistance
-    })
+    .filter(([, score]) => score > 0)
+    .sort((left, right) => right[1] - left[1])
     .map(([amount]) => amount)
     .slice(0, 6)
 }
